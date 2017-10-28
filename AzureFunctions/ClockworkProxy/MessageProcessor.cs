@@ -16,35 +16,54 @@ namespace ClockworkProxy
     public static class MessageProcessor
     {
         [FunctionName("MessageProcessor")]
-        public static async void Run([TimerTrigger("*/15 * * * * *")]TimerInfo myTimer, [Table("messages", Connection = "TableStorageAccount")]IQueryable<ClockworkMessageStorage> messagesTable, [Table("messages", Connection = "TableStorageAccount")]CloudTable messagesCloudTable, TraceWriter log)
+        public static async void Run([TimerTrigger("*/30 * * * * *")]TimerInfo myTimer, [Table("messages", Connection = "TableStorageAccount")]IQueryable<ClockworkMessageStorage> messagesTable, [Table("messages", Connection = "TableStorageAccount")]CloudTable messagesCloudTable, TraceWriter log)
         {
             log.Info($"MessageProcessor running");
 
             var opperations = new List<TableBatchOperation>();
 
-            var messages = messagesTable.Where(m => m.PartitionKey.Equals(MessageTypes.Message, StringComparison.InvariantCultureIgnoreCase)).ToArray().OrderBy(m => m.Sequence).GroupBy(m => m.Id);
-            var registrations = messagesTable.Where(m => m.PartitionKey.Equals(MessageTypes.Registration, StringComparison.InvariantCultureIgnoreCase)).ToArray().OrderBy(m => m.Sequence).GroupBy(m => m.From);
+            var messages = messagesTable
+                .Where(m => m.PartitionKey.Equals(MessageTypes.Message, StringComparison.InvariantCultureIgnoreCase))
+                //.ToArray()
+                .OrderBy(m => m.Sequence)
+                .GroupBy(m => m.Id)
+                .ToArray();
+
+            log.Info($"Found {messages.Length} message sets to process");
+
+            var registrations = messagesTable
+                .Where(m => m.PartitionKey.Equals(MessageTypes.Registration, StringComparison.InvariantCultureIgnoreCase))
+                //.ToArray()
+                .OrderBy(m => m.Sequence)
+                .GroupBy(m => m.From)
+                .ToArray();
+
+            log.Info($"Found {messages.Length} registrations to process");
 
             opperations.AddRange(await ProccessMessages(registrations, MessageTypes.Registration, log));
             opperations.AddRange(await ProccessMessages(messages, MessageTypes.Message, log));
 
             foreach (var opperation in opperations)
             {
-                //await messagesCloudTable.ExecuteBatchAsync(opperation);
+                await messagesCloudTable.ExecuteBatchAsync(opperation);
             }
         }
 
         public static async Task<List<TableBatchOperation>> ProccessMessages(IEnumerable<IGrouping<string, ClockworkMessageStorage>> messageGroups, string messageType, TraceWriter log)
         {
+
             var opperations = new List<TableBatchOperation>();
 
             foreach (var messageGroup in messageGroups)
             {
+                log.Info($"Processing {messageType} group {messageGroup.Key}");
+
                 var batchOperation = new TableBatchOperation();
                 var content = new StringBuilder();
 
                 foreach (var message in messageGroup)
                 {
+                    log.Info($">>Inserting {message.Sequence}");
                     content.Append(message.Content);
                     batchOperation.Delete(message);
                 }
