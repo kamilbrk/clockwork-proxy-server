@@ -10,6 +10,7 @@ using Microsoft.Azure.WebJobs.Host;
 using System.Security.Cryptography;
 using Microsoft.WindowsAzure.Storage.Table;
 using System.Text;
+using ClockworkProxy.Constants;
 
 namespace ClockworkProxy
 {
@@ -19,32 +20,26 @@ namespace ClockworkProxy
         public static async Task<HttpResponseMessage> Run([HttpTrigger(AuthorizationLevel.Anonymous, "post")]HttpRequestMessage req, [Table("messages", Connection = "TableStorageAccount")]ICollector<ClockworkMessageStorage> messagesTable, TraceWriter log)
         {
             var data = ProcessRequest(await req.Content.ReadAsFormDataAsync());
-            var identity = HashFrom(data.From);
 
-            if (data.Content.Length < 2)
-            {
-                log.Warning($"Recieved message '{identity}' body is too short");
-                return req.CreateResponse(HttpStatusCode.BadRequest, "Content is too short!");
-            }
+            log.Info($"Recieved message from {data.From}");
 
-            log.Info($"Recieved message '{identity}'");
-
-            var sequence = data.Content.Substring(0, 1);
-            var content = data.Content.Substring(1, data.Content.Length - 1);
+            var type = data.Content.Substring(1, 1).Equals("m", StringComparison.InvariantCultureIgnoreCase) ? MessageTypes.Message : MessageTypes.Registration;
 
             var row = new ClockworkMessageStorage
             {
-                PartitionKey = identity,
+                PartitionKey = type,
                 RowKey = Guid.NewGuid().ToString(),
+                Id = HashFrom(data.From),
+                From = data.From,
                 To = data.To,
-                Content = content,
-                Sequence = sequence,
+                Content = data.Content.Substring(2, data.Content.Length - 2),
+                Sequence = data.Content.Substring(0, 1),
                 Keyword = data.Keyword
             };
 
             messagesTable.Add(row);
 
-            log.Info($"Message'{identity}' inserted 'OK'");
+            log.Info($"{type} {row.Sequence} from {data.From} inserted OK");
 
             return req.CreateResponse(HttpStatusCode.OK);
         }
