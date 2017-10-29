@@ -10,5 +10,6 @@ namespace ClockworkProxy.Models
         public string Content { get; set; }
         public string Id { get; set; }
         public string Keyword { get; set; }
+        public string MessageLength { get; set; }
     }
 }
