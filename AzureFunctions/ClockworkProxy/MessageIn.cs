@@ -8,12 +8,18 @@ using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Azure.WebJobs.Host;
 using System.Security.Cryptography;
-using Microsoft.WindowsAzure.Storage.Table;
 using System.Text;
 using ClockworkProxy.Constants;
 
 namespace ClockworkProxy
 {
+    //  01rzMESSAGE
+    //  0 = correlation(0-z) 0
+    //   1 = sequence(0-z)
+    //    r = type(m/r)
+    //     z = last message(1-z)
+
+
     public static class MessageIn
     {
         [FunctionName("messagein")]
@@ -23,18 +29,29 @@ namespace ClockworkProxy
 
             log.Info($"Recieved message from {data.From}");
 
-            var type = data.Content.Substring(1, 1).Equals("m", StringComparison.InvariantCultureIgnoreCase) ? MessageTypes.Message : MessageTypes.Registration;
+
+            var correlation = data.Content.Substring(0, 1);
+            var sequence = data.Content.Substring(1, 1);
+            var type = data.Content.Substring(2, 1).Equals("m", StringComparison.InvariantCultureIgnoreCase) ? MessageTypes.Message : MessageTypes.Registration;
+            var length = data.Content.Substring(3, 1);
+            
+
+            var identity = HashFrom($"{correlation}{data.From}")
+                .Replace('/', '$')
+                .Replace('?', '£')
+                .Replace('#', '!')
+                .Replace('\\', '&');
+
+            var partitionKey = $"{type}-{identity}";
 
             var row = new ClockworkMessageStorage
             {
-                PartitionKey = type,
-                RowKey = Guid.NewGuid().ToString(),
-                Id = HashFrom(data.From),
+                PartitionKey = partitionKey,
+                RowKey = sequence,
                 From = data.From,
                 To = data.To,
-                Content = data.Content.Substring(2, data.Content.Length - 2),
-                Sequence = data.Content.Substring(0, 1),
-                Keyword = data.Keyword
+                Content = data.Content.Substring(4, data.Content.Length - 4),
+                MessageLength = length
             };
 
             messagesTable.Add(row);

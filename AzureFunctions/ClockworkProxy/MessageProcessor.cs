@@ -16,21 +16,23 @@ namespace ClockworkProxy
     public static class MessageProcessor
     {
         [FunctionName("MessageProcessor")]
-        public static async void Run([TimerTrigger("*/15 * * * * *")]TimerInfo myTimer, [Table("messages", Connection = "TableStorageAccount")]IQueryable<ClockworkMessageStorage> messagesTable, [Table("messages", Connection = "TableStorageAccount")]CloudTable messagesCloudTable, TraceWriter log)
+        public static async void Run([TimerTrigger("*/10 * * * * *")]TimerInfo myTimer, [Table("messages", Connection = "TableStorageAccount")]IQueryable<ClockworkMessageStorage> messagesTable, [Table("messages", Connection = "TableStorageAccount")]CloudTable messagesCloudTable, TraceWriter log)
         {
-            log.Info($"MessageProcessor running");
+            log.Info("MessageProcessor running");
 
             var opperations = new List<TableBatchOperation>();
 
-            var messages = messagesTable.Where(m => m.PartitionKey.Equals(MessageTypes.Message, StringComparison.InvariantCultureIgnoreCase)).ToArray().OrderBy(m => m.Sequence).GroupBy(m => m.Id);
-            var registrations = messagesTable.Where(m => m.PartitionKey.Equals(MessageTypes.Registration, StringComparison.InvariantCultureIgnoreCase)).ToArray().OrderBy(m => m.Sequence).GroupBy(m => m.From);
+            var allMessages = messagesTable.ToArray().GroupBy(m => m.PartitionKey).ToArray();
+
+            var messages = allMessages.Where(m => m.Key.StartsWith(MessageTypes.Message, StringComparison.InvariantCultureIgnoreCase)).ToArray();
+            var registrations = allMessages.Where(m => m.Key.StartsWith(MessageTypes.Registration, StringComparison.InvariantCultureIgnoreCase)).ToArray();
 
             opperations.AddRange(await ProccessMessages(registrations, MessageTypes.Registration, log));
             opperations.AddRange(await ProccessMessages(messages, MessageTypes.Message, log));
 
             foreach (var opperation in opperations)
             {
-                //await messagesCloudTable.ExecuteBatchAsync(opperation);
+                await messagesCloudTable.ExecuteBatchAsync(opperation);
             }
         }
 
@@ -40,53 +42,72 @@ namespace ClockworkProxy
 
             foreach (var messageGroup in messageGroups)
             {
-                var batchOperation = new TableBatchOperation();
-                var content = new StringBuilder();
+                log.Info($"Processing {messageType} group {messageGroup.Key}");
 
-                foreach (var message in messageGroup)
+                if (!IsMessageGroupWhole(messageGroup))
                 {
-                    content.Append(message.Content);
-                    batchOperation.Delete(message);
+                    log.Info($"Message group {messageType} is incomplete.");
                 }
-
-                opperations.Add(batchOperation);
-
-                switch (messageType)
+                else
                 {
-                    case MessageTypes.Message:
-                        log.Info($"Sending message body '{content}'");
+                    var batchOperation = new TableBatchOperation();
+                    var content = new StringBuilder();
 
-                        var messageJson = JsonConvert.SerializeObject(new MessageModel
-                        {
-                            Message = content.ToString()
-                        });
+                    foreach (var message in messageGroup)
+                    {
+                        log.Info($">> Inserting {message.Sequence}");
+                        content.Append(message.Content);
+                        batchOperation.Delete(message);
+                    }
 
-                        using (var client = new HttpClient())
-                        {
-                           await client.PostAsync("http://163.172.129.168:3000/message", new StringContent(messageJson, Encoding.UTF8, "application/json"));
-                        }
-                        break;
-                    case MessageTypes.Registration:
-                        log.Info($"Sending registration body '{content}' for {messageGroup.Key}");
+                    opperations.Add(batchOperation);
 
-                        var registrationJson = JsonConvert.SerializeObject(new RegistrationModel
-                        {
-                            PublicKey = content.ToString(),
-                            Mobile = messageGroup.Key
-                        });
+                    switch (messageType)
+                    {
+                        case MessageTypes.Message:
+                            log.Info($"Sending message body '{content}'");
 
-                        using (var client = new HttpClient())
-                        {
-                            await client.PostAsync("http://163.172.129.168:3000/register", new StringContent(registrationJson, Encoding.UTF8, "application/json"));
-                        }
-                        break;
-                    default:
-                        log.Warning($"Unknown message type '{messageType}'");
-                        break;
+                            var messageJson = JsonConvert.SerializeObject(new MessageModel
+                            {
+                                Message = content.ToString()
+                            });
+
+                            using (var client = new HttpClient())
+                            {
+                                await client.PostAsync("http://163.172.129.168:3000/message", new StringContent(messageJson, Encoding.UTF8, "application/json"));
+                            }
+                            break;
+                        case MessageTypes.Registration:
+                            log.Info($"Sending registration body '{content}' for {messageGroup.Key}");
+
+                            var registrationJson = JsonConvert.SerializeObject(new RegistrationModel
+                            {
+                                PublicKey = content.ToString(),
+                                Mobile = messageGroup.First().From
+                            });
+
+                            using (var client = new HttpClient())
+                            {
+                                await client.PostAsync("http://163.172.129.168:3000/register", new StringContent(registrationJson, Encoding.UTF8, "application/json"));
+                            }
+                            break;
+                        default:
+                            log.Warning($"Unknown message type '{messageType}'");
+                            break;
+                    }
                 }
             }
 
             return opperations;
+        }
+
+        public static bool IsMessageGroupWhole(IGrouping<string, ClockworkMessageStorage> messageGroup)
+        {
+            var lastMessage = messageGroup.Last();
+
+            var length = int.Parse(lastMessage.MessageLength) + 1;
+
+            return messageGroup.Count() == length && lastMessage.RowKey.Equals(lastMessage.MessageLength, StringComparison.InvariantCultureIgnoreCase);
         }
     }
 }
