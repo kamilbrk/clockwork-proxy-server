@@ -16,41 +16,43 @@ function server () {
     if (!req.body.mobile || !req.body.public_key)
       res.sendStatus(400);
 
-    db.set(req.body.mobile, { 
+    db.set(req.body.mobile.replace(/\+/, ''), { 
       key: req.body.public_key,
       id: 96
     });
 
     console.log(
       "%s registering:\n%s", 
-      req.body.mobile, 
+      req.body.mobile.replace(/\+/, ''), 
       req.body.public_key);
 
     res.sendStatus(200);
   });
 
   app.post('/message', function (req, res) {
-    if (!req.body.message) res.sendStatus(400);
-
+    if (!req.body.message) return res.sendStatus(400);
+      
+    console.log("Received Message");
     var ourKey = crypto.getKey(keys.privateKey);
 
     var pt = ourKey.decrypt(req.body.message);
 
-    if (!pt) res.sendStatus(400);
+    if (!pt) return res.sendStatus(400);
 
     var components = pt.split(/~/);
 
-    if (!components || components.length != 2) res.sendStatus(400);
+    if (!components || components.length != 2) 
+      return res.sendStatus(400);
 
     var recipient = db.get(components[0]);
 
-    if (!recipient) res.sendStatus(400);
+    if (!recipient) return res.sendStatus(400);
 
     var theirKey = crypto.getKey(recipient.key);
 
     var cypher = theirKey.encrypt(components[1]);
 
-    var parts = cypher.match(/.{1,137}/g);
+    var parts = cypher.match(/.{1,138}/g);
 
     var id = recipient.id;
 
@@ -74,13 +76,22 @@ function server () {
         path: '/http/send.aspx?'
       };
 
-      var payload = String.fromCharCode(id).concat(i.toString(), parts[i]);
+      var payload = String.fromCharCode(id).concat(
+        i.toString(),
+        //parts.length.toString(),
+        parts[i]);
 
       sendTextOptions.path += queryString.stringify({
         key: encodeURIComponent(keys.clockworkApiKey),
         to: encodeURIComponent(components[0]),
         content: encodeURIComponent(payload)
       });
+
+      console.log(
+        "Sending message %s%s to %s",
+        String.fromCharCode(id),
+        i,
+        components[0]);
 
       https.get(sendTextOptions, (sendRes) => {
         console.log("Sent message");
